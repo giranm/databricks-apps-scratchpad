@@ -1,0 +1,8 @@
+command: [
+  "python", 
+  "app.py"
+]
+
+env:
+  - name: "MODEL_ENDPOINT_NAME"
+    value: "databricks-dbrx-instruct"
