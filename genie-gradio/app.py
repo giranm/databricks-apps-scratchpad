@@ -169,11 +169,12 @@ with gr.Blocks() as demo:
     with gr.Row():
         token_input = gr.Textbox(
             type="password",
-            label="Enter your user token",
-            placeholder="Enter token here...",
+            label="Databricks Token",
+            placeholder="Enter your Databricks token",
             show_label=True,
+            scale=4,
         )
-        set_token_btn = gr.Button("Set Token")
+        set_token_btn = gr.Button("Set Token", scale=1)
 
     # Container for components that should only show after token is set
     with gr.Group(visible=False) as authenticated_container:
