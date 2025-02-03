@@ -39,7 +39,9 @@ def init_state():
         "user_token": "",
         "genie_rooms": [],
         "selected_genie_room_id": "",
+        "selected_genie_room_name": "",
         "current_conversation_id": "",
+        "current_curated_questions": [],
     }
 
 
@@ -66,7 +68,12 @@ def update_genie_rooms(state):
 
 
 def update_selected_genie_room_id(genie_room_name, state):
-    """Update the selected genie room id in state while preserving other state values"""
+    """Update the selected genie room id and current curated questions in state while preserving other state values"""
+    genie_handler = GenieHandler(
+        databricks_host=DATABRICKS_HOST,
+        databricks_user_token=state["user_token"],
+    )
+
     genie_room_id = next(
         (
             room["space_id"]
@@ -76,7 +83,22 @@ def update_selected_genie_room_id(genie_room_name, state):
         None,
     )
     logger.info(f"Selected genie room name: {genie_room_name} and id: {genie_room_id}")
-    return {**state, "selected_genie_room_id": genie_room_id}
+
+    current_curated_questions = [{"question_text": "Explain the data set"}]
+    try:
+        fetched_questions = genie_handler.get_curated_questions(genie_room_id)
+        if "curated_questions" in fetched_questions:
+            current_curated_questions.extend(fetched_questions["curated_questions"])
+        logger.info(f"Current curated questions: {current_curated_questions}")
+    except Exception as e:
+        logger.error(f"Error getting curated questions: {str(e)}", exc_info=True)
+
+    return {
+        **state,
+        "selected_genie_room_id": genie_room_id,
+        "selected_genie_room_name": genie_room_name,
+        "current_curated_questions": current_curated_questions,
+    }
 
 
 def update_current_conversation_id(current_conversation_id, state):
@@ -157,45 +179,142 @@ def message_handler(message, history, state):
 
 
 # Create Gradio interface
-with gr.Blocks() as demo:
+with gr.Blocks(
+    css="""
+    /* Make containers transparent */
+    .gradio-container {background-color: transparent !important}
+    .contain {background-color: transparent !important}
+    .gap {background-color: transparent !important}
+    
+    /* Style suggestion buttons */
+    .suggestion-row button {
+        margin: 0.25rem !important;
+        min-width: 200px !important;
+    }
 
+    /* Custom warning box */
+    .warning-box {
+        background-color: #fff3cd;
+        color: #856404;
+        padding: 1rem;
+        border-radius: 0.375rem;
+        border: 1px solid #ffeeba;
+        margin: 1rem 0;
+    }
+    """
+) as demo:
     # Initialize state
     state = gr.State(init_state())
 
-    # Render components
+    # Header
     gr.Markdown("# AI/BI Genie on Gradio")
     gr.Markdown("Ask questions and get responses from AI/BI Genie")
+    gr.Markdown(
+        '<div class="warning-box">⚠️ This app uses experimental features of Databricks AI/BI Genie. Please do not use this in production until the Genie API is released.</div>',
+        elem_classes="warning-container",
+    )
 
+    # Token Input (Always visible)
     with gr.Row():
         token_input = gr.Textbox(
             type="password",
-            label="Databricks Token",
+            label="Databricks Personal Access Token",
             placeholder="Enter your Databricks token",
             show_label=True,
-            scale=4,
+            scale=8,
         )
-        set_token_btn = gr.Button("Set Token", scale=1)
+        set_token_btn = gr.Button("Authenticate using Token", scale=1, size="lg")
 
-    # Container for components that should only show after token is set
-    with gr.Group(visible=False) as authenticated_container:
+    # Genie Room Selection (Initially hidden)
+    with gr.Row(visible=False) as room_selection_row:
         genie_rooms_dropdown = gr.Dropdown(
-            label="Select a Genie room",
-            choices=[],  # Start with empty choices
-            show_label=True,
+            label="Select a Genie room", choices=[], show_label=True, scale=1
         )
 
+    # Chat handlers
+    def respond(message, history, state):
+        """
+        ChatInterface expects:
+        - message: the current message
+        - history: list of (user, assistant) message tuples
+        - state: our state object
+        Returns: the bot's response
+        """
+        bot_message = message_handler(message, history, state)
+        return bot_message
+
+    # Chat Interface (Initially hidden)
+    with gr.Row(visible=False) as chat_row:
         chatbot = gr.ChatInterface(
-            fn=message_handler,
+            fn=respond,
             additional_inputs=[state],
         )
 
-    # Handle input changes
+    # Curated Questions (Initially hidden)
+    with gr.Row(visible=False, elem_classes="suggestion-row") as suggestion_row:
+        with gr.Column(scale=1):
+            gr.Markdown("### Suggested Questions")
+            with gr.Row():
+                MAX_SUGGESTIONS = 10
+                suggestion_buttons = [
+                    gr.Button(visible=False, size="md", scale=0)
+                    for _ in range(MAX_SUGGESTIONS)
+                ]
+
+    # Suggestion handler
+    def use_suggestion(suggestion_text):
+        # Just return the text to populate the input
+        return suggestion_text
+
+    # Room selection handler
+    def on_room_select(genie_room_name, state):
+        updated_state = update_selected_genie_room_id(genie_room_name, state)
+
+        # Update suggestion buttons
+        button_updates = []
+        for i, btn in enumerate(suggestion_buttons):
+            if i < len(updated_state["current_curated_questions"]):
+                q = updated_state["current_curated_questions"][i]
+                button_updates.append(gr.update(value=q["question_text"], visible=True))
+            else:
+                button_updates.append(gr.update(visible=False))
+
+        # Show chat interface and suggestions
+        return [
+            updated_state,
+            gr.update(visible=True),  # Update Row visibility only
+            gr.update(visible=True),  # suggestion_row
+        ] + button_updates
+
+    # Room selection event
+    genie_rooms_dropdown.change(
+        fn=on_room_select,
+        inputs=[genie_rooms_dropdown, state],
+        outputs=[state, chat_row, suggestion_row] + suggestion_buttons,
+    )
+
+    # Set up suggestion button handlers
+    for btn in suggestion_buttons:
+        btn.click(
+            use_suggestion,
+            inputs=[btn],
+            outputs=[chatbot.textbox],  # Target the ChatInterface's textbox
+        ).then(
+            fn=None,
+            js="""
+            () => {
+                // Find the submit button and click it
+                document.querySelector('.submit-button').click();
+                return [];
+            }
+            """,
+        )
+
+    # Token handler
     def on_token_set(token, state):
-        """Handle token setting and show/hide components"""
         state_with_token = update_token(token, state)
         state_with_rooms = update_genie_rooms(state_with_token)
 
-        # Get room choices from updated state
         room_choices = [
             room["display_name"]
             for room in state_with_rooms["genie_rooms"]
@@ -203,25 +322,16 @@ with gr.Blocks() as demo:
         ]
 
         return (
-            state_with_rooms,  # Update state
-            gr.update(visible=True),  # Show authenticated container
-            gr.update(choices=room_choices),  # Update dropdown choices
+            state_with_rooms,
+            gr.update(visible=True),  # Show room selection
+            gr.update(choices=room_choices),
         )
 
+    # Token event
     set_token_btn.click(
         fn=on_token_set,
         inputs=[token_input, state],
-        outputs=[
-            state,
-            authenticated_container,
-            genie_rooms_dropdown,
-        ],
-    )
-
-    genie_rooms_dropdown.change(
-        fn=update_selected_genie_room_id,
-        inputs=[genie_rooms_dropdown, state],
-        outputs=[state],
+        outputs=[state, room_selection_row, genie_rooms_dropdown],
     )
 
 # Entrypoint
