@@ -92,7 +92,7 @@ class GenieHandler:
 
     def get_query_result(self, space_id, conversation_id, message_id):
         res = self.session.get(
-            url=f"https://{self.databricks_host}/api/2.0/data-rooms/{space_id}/conversations/{conversation_id}/messages/{message_id}/get-query-result",
+            url=f"https://{self.databricks_host}/api/2.0/genie/spaces/{space_id}/conversations/{conversation_id}/messages/{message_id}/query-result",
         )
         if res.status_code == 200:
             return res.json()
@@ -107,27 +107,10 @@ class GenieHandler:
     """
 
     def prettify_query_result(self, query_result):
-        result_raw_json, manifest_raw_json = (
-            query_result["result"]["result_raw_json"],
-            query_result["result"]["manifest_raw_json"],
-        )
-        result_converted_json, manifest_converted_json = map(
-            convert_json_string_to_dict, [result_raw_json, manifest_raw_json]
-        )
-
-        column_header_names = [
-            column["name"] for column in manifest_converted_json["schema"]["columns"]
-        ]
-        rows_str_extracted = [
-            [item.get("str", None) for item in entry["values"]]
-            for entry in result_converted_json[
-                "data_typed_array"
-            ]  # TODO handle empty table
-        ]
-
+        columns, rows = self.transform_query_result(query_result)
         table_as_str = PrettyTable()
-        table_as_str.field_names = column_header_names
-        table_as_str.add_rows(rows=rows_str_extracted)
+        table_as_str.field_names = columns
+        table_as_str.add_rows(rows)
         return table_as_str
 
     def extract_message_content(self, response):
@@ -138,3 +121,29 @@ class GenieHandler:
                     content += attachment["text"]["content"] + "\n"
 
         return content
+
+    def transform_query_result(self, response: dict) -> tuple[list, list]:
+        """
+        Converts queryresponse into structured column/row format
+
+        Args:
+            response: Raw API response containing query result
+
+        Returns:
+            Tuple containing:
+            - List of column names (strings)
+            - List of rows (lists of string values)
+        """
+        # Extract column names from schema
+        columns = [
+            col["name"]
+            for col in response["statement_response"]["manifest"]["schema"]["columns"]
+        ]
+
+        # Extract row values from data array
+        rows = [
+            [value["str"] for value in row["values"]]
+            for row in response["statement_response"]["result"]["data_typed_array"]
+        ]
+
+        return columns, rows

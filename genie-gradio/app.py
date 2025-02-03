@@ -118,15 +118,15 @@ def message_handler(message, history, state):
 
     if not state["user_token"]:
         logger.warning("User token is not set")
-        return "Please enter your user token first"
+        return "Please enter your user token first", state
 
     if not state["selected_genie_room_id"]:
         logger.warning("Genie room is not selected")
-        return "Please select a Genie room first"
+        return "Please select a Genie room first", state
 
     if not message.strip():
         logger.warning("User question is empty")
-        return "ERROR: The question should not be empty"
+        return "ERROR: The question should not be empty", state
 
     message_content = None
     handler_response = None
@@ -139,6 +139,10 @@ def message_handler(message, history, state):
             handler_response = genie_handler.start_conversation(
                 state["selected_genie_room_id"], message
             )
+            state["current_conversation_id"] = handler_response["conversation_id"]
+            logger.info(
+                f"Created new conversation with ID: {state['current_conversation_id']}"
+            )
         else:
             logger.info(
                 f"Continuing conversation id: {state['current_conversation_id']}"
@@ -149,6 +153,7 @@ def message_handler(message, history, state):
                 message,
             )
 
+        logger.info(f"Genie Handler response: {handler_response}")
         text = (
             handler_response.get("attachments")[0].get("text").get("content")
             if handler_response.get("attachments")[0].get("text")
@@ -166,16 +171,17 @@ def message_handler(message, history, state):
                 conversation_id=state["current_conversation_id"],
                 message_id=message_id,
             )
+            logger.info(f"Query result: {query_result}")
             table_as_str = genie_handler.prettify_query_result(query_result)
             message_content = f"{query_description}\n" f"```{table_as_str}```"
         elif text:
             message_content = f"{text}"
 
-        return message_content
+        return message_content, state
 
     except Exception as e:
         logger.error(f"Error querying model: {str(e)}", exc_info=True)
-        return f"Error: {str(e)}"
+        return f"Error: {str(e)}", state
 
 
 # Create Gradio interface
@@ -238,16 +244,17 @@ with gr.Blocks(
         - message: the current message
         - history: list of (user, assistant) message tuples
         - state: our state object
-        Returns: the bot's response
+        Returns: (bot's response, updated state)
         """
-        bot_message = message_handler(message, history, state)
-        return bot_message
+        bot_message, updated_state = message_handler(message, history, state)
+        return bot_message, updated_state
 
     # Chat Interface (Initially hidden)
     with gr.Row(visible=False) as chat_row:
         chatbot = gr.ChatInterface(
             fn=respond,
             additional_inputs=[state],
+            additional_outputs=[state],  # Add state as an output
         )
 
     # Curated Questions (Initially hidden)
