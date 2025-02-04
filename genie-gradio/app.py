@@ -20,19 +20,14 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
-ENVIRONMENT = os.getenv("ENVIRONMENT", "PROD")
 DATABRICKS_HOST = os.getenv("DATABRICKS_HOST")
 
-# Initialize WorkspaceClient appropriately for the environment
-config: Config = None
-wc: WorkspaceClient = None
+# Initial variables
 genie_handler: GenieHandler = None
 
-if ENVIRONMENT == "LOCAL":
-    config = Config(profile="DEFAULT")
-    wc = WorkspaceClient(config=config)
-else:
-    wc = WorkspaceClient()
+"""
+Handlers Methods
+"""
 
 
 def init_state():
@@ -205,7 +200,10 @@ def message_handler(message, history, state):
         return f"Error: {str(e)}", state
 
 
-# Create Gradio interface
+"""
+Gradio Interface
+"""
+
 with gr.Blocks(
     title="AI/BI Genie on Gradio",
     css="""
@@ -259,22 +257,16 @@ with gr.Blocks(
             label="Select a Genie room", choices=[], show_label=True, scale=1
         )
 
-    # Chat handlers
-    def respond(message, history, state):
-        """
-        ChatInterface expects:
-        - message: the current message
-        - history: list of (user, assistant) message tuples
-        - state: our state object
-        Returns: (bot's response, updated state)
-        """
-        bot_message, updated_state = message_handler(message, history, state)
-        return bot_message, updated_state
-
     # Chat Interface (Initially hidden)
     with gr.Row(visible=False) as chat_row:
+        # Chat handler
+        def respond(message, history, state):
+            bot_message, updated_state = message_handler(message, history, state)
+            return bot_message, updated_state
+
         chatbot = gr.ChatInterface(
             fn=respond,
+            type="messages",
             additional_inputs=[state],
             additional_outputs=[state],  # Add state as an output
         )
@@ -289,11 +281,6 @@ with gr.Blocks(
                     gr.Button(visible=False, size="md", scale=0)
                     for _ in range(MAX_SUGGESTIONS)
                 ]
-
-    # Suggestion handler
-    def use_suggestion(suggestion_text):
-        # Just return the text to populate the input
-        return suggestion_text
 
     # Room selection handler
     def on_room_select(genie_room_name, state):
@@ -322,7 +309,11 @@ with gr.Blocks(
         outputs=[state, chat_row, suggestion_row] + suggestion_buttons,
     )
 
-    # Set up suggestion button handlers
+    # Suggestion handler
+    def use_suggestion(suggestion_text):
+        return suggestion_text
+
+    # Set up suggestion buttons
     for btn in suggestion_buttons:
         btn.click(
             use_suggestion,
