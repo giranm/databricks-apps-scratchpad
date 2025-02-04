@@ -8,6 +8,8 @@ import gradio as gr
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 
+import requests
+
 from libs.genie import GenieHandler
 
 # Logging
@@ -45,9 +47,20 @@ def init_state():
     }
 
 
-def update_token(token, state):
-    """Update the user token in state while preserving other state values"""
-    return {**state, "user_token": token}
+def update_and_validate_token(token, state):
+    """Update and validate the user token in state while preserving other state values"""
+    redacted_token = "*" * (len(token) - 4) + token[-4:] if len(token) > 4 else "****"
+    logger.info(f"Validating token: {redacted_token}")
+    res = requests.get(
+        url=f"https://{DATABRICKS_HOST}/api/2.0/token/list",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if res.status_code == 200:
+        logger.info(f"Token is valid")
+        return {**state, "user_token": token}
+    else:
+        logger.error(f"Error validating token: {res.text}")
+        raise gr.Error(f"Error validating token: {res.text}", print_exception=False)
 
 
 def update_genie_rooms(state):
@@ -172,10 +185,18 @@ def message_handler(message, history, state):
                 message_id=message_id,
             )
             logger.info(f"Query result: {query_result}")
-            table_as_str = genie_handler.prettify_query_result(query_result)
-            message_content = f"{query_description}\n" f"```{table_as_str}```"
+            columns, rows = genie_handler.transform_query_result(query_result)
+            message_content = [
+                f"{query_description}",
+                gr.Dataframe(
+                    headers=columns,
+                    value=rows,
+                    row_count=len(rows),
+                    col_count=(len(columns), "fixed"),
+                ),
+            ]
         elif text:
-            message_content = f"{text}"
+            message_content = [f"{text}"]
 
         return message_content, state
 
@@ -186,6 +207,7 @@ def message_handler(message, history, state):
 
 # Create Gradio interface
 with gr.Blocks(
+    title="AI/BI Genie on Gradio",
     css="""
     /* Make containers transparent */
     .gradio-container {background-color: transparent !important}
@@ -207,7 +229,7 @@ with gr.Blocks(
         border: 1px solid #ffeeba;
         margin: 1rem 0;
     }
-    """
+    """,
 ) as demo:
     # Initialize state
     state = gr.State(init_state())
@@ -319,7 +341,12 @@ with gr.Blocks(
 
     # Token handler
     def on_token_set(token, state):
-        state_with_token = update_token(token, state)
+
+        if not token:
+            logger.error("Token is required")
+            raise gr.Error("Token is required", print_exception=False)
+
+        state_with_token = update_and_validate_token(token, state)
         state_with_rooms = update_genie_rooms(state_with_token)
 
         room_choices = [

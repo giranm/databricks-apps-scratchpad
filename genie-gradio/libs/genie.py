@@ -9,14 +9,6 @@ import requests
 from prettytable import PrettyTable
 
 
-# Function to convert raw JSON string to a native dict
-def convert_json_string_to_dict(json_string):
-    try:
-        return json.loads(json_string)
-    except json.JSONDecodeError as e:
-        return str(e)
-
-
 class GenieHandler:
     def __init__(self, databricks_host, databricks_user_token):
         self.logger = logging.getLogger(__name__)
@@ -106,13 +98,6 @@ class GenieHandler:
     Helper methods to prettify API responses
     """
 
-    def prettify_query_result(self, query_result):
-        columns, rows = self.transform_query_result(query_result)
-        table_as_str = PrettyTable()
-        table_as_str.field_names = columns
-        table_as_str.add_rows(rows)
-        return table_as_str
-
     def extract_message_content(self, response):
         content = ""
         if response.get("attachments") and len(response["attachments"]) > 0:
@@ -122,12 +107,12 @@ class GenieHandler:
 
         return content
 
-    def transform_query_result(self, response: dict) -> tuple[list, list]:
+    def transform_query_result(self, query_result: dict) -> tuple[list, list]:
         """
-        Converts queryresponse into structured column/row format
+        Converts query result into structured column/row format
 
         Args:
-            response: Raw API response containing query result
+            query_result: Raw API response containing query result
 
         Returns:
             Tuple containing:
@@ -137,13 +122,15 @@ class GenieHandler:
         # Extract column names from schema
         columns = [
             col["name"]
-            for col in response["statement_response"]["manifest"]["schema"]["columns"]
+            for col in query_result["statement_response"]["manifest"]["schema"][
+                "columns"
+            ]
         ]
 
         # Extract row values from data array
         rows = [
             [value["str"] for value in row["values"]]
-            for row in response["statement_response"]["result"]["data_typed_array"]
+            for row in query_result["statement_response"]["result"]["data_typed_array"]
         ]
 
         return columns, rows
