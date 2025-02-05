@@ -40,7 +40,7 @@ def init_state():
     }
 
 
-def update_and_validate_token(token, state):
+def update_and_validate_token(state, token):
     """Update and validate the user token in state while preserving other state values"""
     redacted_token = "*" * (len(token) - 4) + token[-4:] if len(token) > 4 else "****"
     logger.info(f"Validating token: {redacted_token}")
@@ -68,7 +68,7 @@ def update_genie_rooms(state):
 
     genie_rooms = []
     try:
-        genie_rooms = genie_handler.get_genie_rooms()["data_rooms"]
+        genie_rooms = genie_handler.get_genie_rooms()
         logger.info(f"Genie rooms: {genie_rooms}")
     except Exception as e:
         logger.error(f"Error getting genie rooms: {str(e)}", exc_info=True)
@@ -79,7 +79,7 @@ def update_genie_rooms(state):
     return {**state, "genie_rooms": genie_rooms}
 
 
-def update_selected_genie_room_id(genie_room_name, state):
+def update_selected_genie_room_id(state, genie_room_name):
     """Update the selected genie room id and current curated questions in state while preserving other state values"""
     genie_handler = GenieHandler(
         databricks_host=DATABRICKS_HOST,
@@ -98,9 +98,9 @@ def update_selected_genie_room_id(genie_room_name, state):
 
     current_curated_questions = [{"question_text": "Explain the data set"}]
     try:
-        fetched_questions = genie_handler.get_curated_questions(genie_room_id)
-        if "curated_questions" in fetched_questions:
-            current_curated_questions.extend(fetched_questions["curated_questions"])
+        curated_questions = genie_handler.get_curated_questions(genie_room_id)
+        if curated_questions:
+            current_curated_questions.extend(curated_questions)
         logger.info(f"Current curated questions: {current_curated_questions}")
     except Exception as e:
         logger.error(f"Error getting curated questions: {str(e)}", exc_info=True)
@@ -123,11 +123,6 @@ def update_selected_genie_room_id(genie_room_name, state):
         "selected_genie_room_name": genie_room_name,
         "current_curated_questions": current_curated_questions,
     }
-
-
-def update_current_conversation_id(current_conversation_id, state):
-    """Update the current conversation id in state while preserving other state values"""
-    return {**state, "current_conversation_id": current_conversation_id}
 
 
 def message_handler(message, history, state):
@@ -271,7 +266,9 @@ with gr.Blocks(
             show_label=True,
             scale=8,
         )
-        set_token_btn = gr.Button("Authenticate using Token", scale=1, size="lg")
+        set_token_btn = gr.Button(
+            "Authenticate using Token", scale=1, size="lg", variant="primary"
+        )
 
     # Genie Room Selection (Initially hidden)
     with gr.Row(visible=False) as room_selection_row:
@@ -305,8 +302,8 @@ with gr.Blocks(
                 ]
 
     # Room selection handler
-    def on_room_select(genie_room_name, state):
-        updated_state = update_selected_genie_room_id(genie_room_name, state)
+    def on_room_select(state, genie_room_name):
+        updated_state = update_selected_genie_room_id(state, genie_room_name)
 
         # Update suggestion buttons
         button_updates = []
@@ -327,7 +324,7 @@ with gr.Blocks(
     # Room selection event
     genie_rooms_dropdown.change(
         fn=on_room_select,
-        inputs=[genie_rooms_dropdown, state],
+        inputs=[state, genie_rooms_dropdown],
         outputs=[state, chat_row, suggestion_row] + suggestion_buttons,
     )
 
@@ -338,7 +335,7 @@ with gr.Blocks(
     # Set up suggestion buttons
     for btn in suggestion_buttons:
         btn.click(
-            use_suggestion,
+            fn=use_suggestion,
             inputs=[btn],
             outputs=[chatbot.textbox],  # Target the ChatInterface's textbox
         ).then(
@@ -359,7 +356,7 @@ with gr.Blocks(
             logger.error("Token is required")
             raise gr.Error("Token is required", print_exception=False, duration=5)
 
-        state_with_validated_token = update_and_validate_token(token, state)
+        state_with_validated_token = update_and_validate_token(state, token)
         state_with_rooms = update_genie_rooms(state=state_with_validated_token)
 
         room_choices = [

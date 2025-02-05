@@ -35,7 +35,12 @@ class GenieHandler:
         )
 
         if res.status_code == 200:
-            return res.json()
+            res_json = res.json()
+            if "data_rooms" in res_json:
+                return res_json["data_rooms"]
+            else:
+                self.logger.warning(f"Data rooms not found in response: {res_json}")
+                return None
         else:
             self.logger.error(
                 f"Failed to get Genie rooms: {res.status_code} - {res.text}"
@@ -47,7 +52,14 @@ class GenieHandler:
             url=f"https://{self.databricks_host}/api/2.0/data-rooms/{space_id}/curated-questions?question_type=SAMPLE_QUESTION",
         )
         if res.status_code == 200:
-            return res.json()
+            res_json = res.json()
+            if "curated_questions" in res_json:
+                return res_json["curated_questions"]
+            else:
+                self.logger.warning(
+                    f"Curated questions not found in response: {res_json} for room ID: {space_id}"
+                )
+                return None
         else:
             self.logger.error(
                 f"Failed to get curated questions: {res.status_code} - {res.text}"
