@@ -2,3 +2,9 @@ command: [
   "python", 
   "app.py"
 ]
+
+env:
+  - name: "GRADIO_CONCURRENCY_COUNT"
+    value: "20"
+  - name: "GRADIO_MAX_THREADS"
+    value: "100"

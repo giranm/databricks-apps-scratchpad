@@ -42,7 +42,8 @@ class GenieGradioApp:
         self.logger = logging.getLogger(__name__)
         self.MAX_SUGGESTIONS = 10
         self.DATABRICKS_HOST = os.getenv("DATABRICKS_HOST")
-        self.state = AppState()
+        self.GRADIO_CONCURRENCY_COUNT = int(os.getenv("GRADIO_CONCURRENCY_COUNT", 20))
+        self.GRADIO_MAX_THREADS = int(os.getenv("GRADIO_MAX_THREADS", 100))
         self.demo = self.create_demo()
 
     def create_demo(self) -> gr.Blocks:
@@ -53,8 +54,8 @@ class GenieGradioApp:
         )
 
         with demo:
-            # Initialize state
-            state = gr.State(self.state)
+            # Initialize state for each session
+            state = gr.State(AppState())  # Each user gets their own AppState
 
             # Create UI components
             self._create_header()
@@ -93,7 +94,7 @@ class GenieGradioApp:
         return response.status_code == 200
 
     def handle_token_submission(
-        self, token: str
+        self, token: str, state: AppState
     ) -> Tuple[AppState, gr.update, gr.update, gr.update]:
         """Handle token submission and validation"""
         if not token:
@@ -101,26 +102,24 @@ class GenieGradioApp:
             raise gr.Error("Token is required", duration=5, print_exception=False)
 
         if not self.validate_token(token):
-            self.logger.error(f"Invalid token: {token}")
+            self.logger.error(f"Invalid token")
             raise gr.Error("Invalid token", duration=5, print_exception=False)
 
-        self.state.user_token = token
-        self.state.user_authenticated = True
+        state.user_token = token
+        state.user_authenticated = True
         self.logger.info(f"User authenticated successfully")
         gr.Success("User authenticated", duration=5)
 
         # Update Genie rooms
         genie_handler = GenieHandler(self.DATABRICKS_HOST, token)
-        self.state.genie_rooms = genie_handler.get_genie_rooms()
+        state.genie_rooms = genie_handler.get_genie_rooms()
 
         room_choices = [
-            room["display_name"]
-            for room in self.state.genie_rooms
-            if room["display_name"]
+            room["display_name"] for room in state.genie_rooms if room["display_name"]
         ]
 
         return (
-            self.state,
+            state,
             gr.update(visible=False),  # Hide token row
             gr.update(visible=True),  # Show room selection
             gr.update(choices=room_choices),
@@ -366,7 +365,7 @@ class GenieGradioApp:
         # Token submission handler
         set_token_btn.click(
             fn=self.handle_token_submission,
-            inputs=[token_input],
+            inputs=[token_input, state],
             outputs=[
                 state,
                 token_row,
@@ -409,7 +408,8 @@ class GenieGradioApp:
 
     def launch(self) -> None:
         """Launch the Gradio interface"""
-        self.demo.launch()
+        self.demo.queue(default_concurrency_limit=self.GRADIO_CONCURRENCY_COUNT)
+        self.demo.launch(max_threads=self.GRADIO_MAX_THREADS)
 
 
 # Create a global instance of the app
