@@ -5,9 +5,6 @@ from dotenv import load_dotenv
 
 import gradio as gr
 
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.core import Config
-
 import requests
 
 from libs.genie import GenieHandler
@@ -34,6 +31,7 @@ def init_state():
     """Initialize the state with empty token"""
     return {
         "user_token": "",
+        "user_authenticated": False,
         "genie_rooms": [],
         "selected_genie_room_id": "",
         "selected_genie_room_name": "",
@@ -52,10 +50,13 @@ def update_and_validate_token(token, state):
     )
     if res.status_code == 200:
         logger.info(f"Token is valid")
-        return {**state, "user_token": token}
+        gr.Success("User has been authenticated", duration=5)
+        return {**state, "user_token": token, "user_authenticated": True}
     else:
         logger.error(f"Error validating token: {res.text}")
-        raise gr.Error(f"Error validating token: {res.text}", print_exception=False)
+        raise gr.Error(
+            f"Error validating token: {res.text}", print_exception=False, duration=5
+        )
 
 
 def update_genie_rooms(state):
@@ -71,6 +72,9 @@ def update_genie_rooms(state):
         logger.info(f"Genie rooms: {genie_rooms}")
     except Exception as e:
         logger.error(f"Error getting genie rooms: {str(e)}", exc_info=True)
+        raise gr.Error(
+            f"Error getting genie rooms: {str(e)}", print_exception=False, duration=5
+        )
 
     return {**state, "genie_rooms": genie_rooms}
 
@@ -100,6 +104,18 @@ def update_selected_genie_room_id(genie_room_name, state):
         logger.info(f"Current curated questions: {current_curated_questions}")
     except Exception as e:
         logger.error(f"Error getting curated questions: {str(e)}", exc_info=True)
+        raise gr.Error(
+            f"Error getting curated questions: {str(e)}",
+            print_exception=False,
+            duration=5,
+        )
+
+    # Handle if existing conversation is found from switching rooms - if so close it.
+    if state["current_conversation_id"]:
+        logger.info(
+            f"Closing existing conversation id: {state['current_conversation_id']}"
+        )
+        state["current_conversation_id"] = None
 
     return {
         **state,
@@ -116,7 +132,7 @@ def update_current_conversation_id(current_conversation_id, state):
 
 def message_handler(message, history, state):
     """
-    Query the LLM with the given message and chat history using ChatDatabricks.
+    Query Databricks AI/BI Genie using the user message and chat history.
     """
 
     genie_handler = GenieHandler(
@@ -126,34 +142,45 @@ def message_handler(message, history, state):
 
     if not state["user_token"]:
         logger.warning("User token is not set")
-        return "Please enter your user token first", state
+        gr.Warning(
+            "Please enter a valid user token", duration=5
+        )  # Incase of DOM overrides
+        return "Warning: Please enter a valid user token", state
 
     if not state["selected_genie_room_id"]:
         logger.warning("Genie room is not selected")
-        return "Please select a Genie room first", state
+        gr.Warning(
+            "Please select a Genie room first", duration=5
+        )  # Incase of DOM overrides
+        return "Warning: Please select a Genie room first", state
 
     if not message.strip():
         logger.warning("User question is empty")
-        return "ERROR: The question should not be empty", state
+        gr.Warning("The question should not be empty", duration=5)
+        return "Warning: The question should not be empty", state
 
     message_content = None
     handler_response = None
 
     try:
-        logger.info(f"Message: {message}")
+        logger.info(
+            f"User input: `{message}` under room ID: {state['selected_genie_room_id']}"
+        )
 
         if not state["current_conversation_id"]:
-            logger.info("Starting a new conversation")
+            logger.info(
+                f"Starting a new conversation with Genie under room ID: {state['selected_genie_room_id']}"
+            )
             handler_response = genie_handler.start_conversation(
                 state["selected_genie_room_id"], message
             )
             state["current_conversation_id"] = handler_response["conversation_id"]
             logger.info(
-                f"Created new conversation with ID: {state['current_conversation_id']}"
+                f"Created new conversation with ID: {state['current_conversation_id']} under room ID: {state['selected_genie_room_id']}"
             )
         else:
             logger.info(
-                f"Continuing conversation id: {state['current_conversation_id']}"
+                f"Continuing conversation id: {state['current_conversation_id']} under room ID: {state['selected_genie_room_id']}"
             )
             handler_response = genie_handler.create_message(
                 state["selected_genie_room_id"],
@@ -196,8 +223,8 @@ def message_handler(message, history, state):
         return message_content, state
 
     except Exception as e:
-        logger.error(f"Error querying model: {str(e)}", exc_info=True)
-        return f"Error: {str(e)}", state
+        logger.error(f"Error handling message: {e}", exc_info=True)
+        return f"Error: {e}", state
 
 
 """
@@ -206,12 +233,7 @@ Gradio Interface
 
 with gr.Blocks(
     title="AI/BI Genie on Gradio",
-    css="""
-    /* Make containers transparent */
-    .gradio-container {background-color: transparent !important}
-    .contain {background-color: transparent !important}
-    .gap {background-color: transparent !important}
-    
+    css="""    
     /* Style suggestion buttons */
     .suggestion-row button {
         margin: 0.25rem !important;
@@ -236,12 +258,12 @@ with gr.Blocks(
     gr.Markdown("# AI/BI Genie on Gradio")
     gr.Markdown("Ask questions and get responses from AI/BI Genie")
     gr.Markdown(
-        '<div class="warning-box">⚠️ This app uses experimental features of Databricks AI/BI Genie. Please do not use this in production until the Genie API is released.</div>',
+        '<div class="warning-box">⚠️ This app uses experimental features of Databricks AI/BI Genie and is meant for demonstrational purposes only.</div>',
         elem_classes="warning-container",
     )
 
-    # Token Input (Always visible)
-    with gr.Row():
+    # Token Input section
+    with gr.Row() as token_row:
         token_input = gr.Textbox(
             type="password",
             label="Databricks Personal Access Token",
@@ -335,28 +357,33 @@ with gr.Blocks(
 
         if not token:
             logger.error("Token is required")
-            raise gr.Error("Token is required", print_exception=False)
+            raise gr.Error("Token is required", print_exception=False, duration=5)
 
-        state_with_token = update_and_validate_token(token, state)
-        state_with_rooms = update_genie_rooms(state_with_token)
+        state_with_validated_token = update_and_validate_token(token, state)
+        state_with_rooms = update_genie_rooms(state=state_with_validated_token)
 
         room_choices = [
             room["display_name"]
             for room in state_with_rooms["genie_rooms"]
             if room["display_name"]
         ]
-
-        return (
+        return [
             state_with_rooms,
+            gr.update(visible=False),  # Hide token row
             gr.update(visible=True),  # Show room selection
             gr.update(choices=room_choices),
-        )
+        ]
 
-    # Token event
+    # Handle token set
     set_token_btn.click(
         fn=on_token_set,
         inputs=[token_input, state],
-        outputs=[state, room_selection_row, genie_rooms_dropdown],
+        outputs=[
+            state,
+            token_row,  # Add token_row to outputs
+            room_selection_row,  # Add room_selection_row to outputs
+            genie_rooms_dropdown,
+        ],
     )
 
 # Entrypoint
