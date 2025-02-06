@@ -104,7 +104,9 @@ class GenieHandler:
         )
 
         self.workspace_client = WorkspaceClient(
-            host=self.databricks_host, token=self.databricks_user_token
+            host=self.databricks_host,
+            token=self.databricks_user_token,
+            auth_type="pat",
         )
 
     def get_genie_rooms(self) -> Optional[List[Dict[str, Any]]]:
